@@ -24,7 +24,9 @@ class DatabaseManager:
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS categories (
                 id INT AUTO_INCREMENT PRIMARY KEY,
-                name VARCHAR(255) NOT NULL
+                name VARCHAR(255) NOT NULL,
+                is_deleted BOOLEAN DEFAULT 0
+                
             )
         ''')
         cursor.execute('''
@@ -32,7 +34,7 @@ class DatabaseManager:
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 name VARCHAR(255) NOT NULL,
                 category_id INT,
-                FOREIGN KEY (category_id) REFERENCES categories(id)
+                FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE CASCADE
             )
         ''')
         cursor.execute('''
@@ -41,7 +43,7 @@ class DatabaseManager:
                 product_id INT,
                 price FLOAT,
                 quantity INT,
-                FOREIGN KEY (product_id) REFERENCES products(id)
+                FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
             )
         ''')
         cursor.execute('''
@@ -49,19 +51,9 @@ class DatabaseManager:
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 product_id INT,
                 image_path TEXT,
-                FOREIGN KEY (product_id) REFERENCES products(id)
+                FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
             )
         ''')
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS product_categories (
-            product_id INT,
-            category_id INT,
-            PRIMARY KEY (product_id, category_id),
-            FOREIGN KEY (product_id) REFERENCES products(id),
-            FOREIGN KEY (category_id) REFERENCES categories(id)
-            )
-        ''')
-        
 
         conn.commit()
         conn.close()
@@ -100,7 +92,7 @@ class CategoryHandler(BaseHTTPRequestHandler):
         host='127.0.0.1',
         user='root',
         password='root',
-        database='shopify'
+        database='shoplast2'
     )
     db_manager.create_tables()
     
@@ -149,74 +141,86 @@ class CategoryHandler(BaseHTTPRequestHandler):
         if self.path.startswith('/categories/'):
             category_id = int(self.path.split('/')[2])
             content_length = int(self.headers['Content-Length'])
-            updated_data = json.loads(self.rfile.read(content_length).decode('utf-8'))
+            category_data = json.loads(self.rfile.read(content_length).decode('utf-8'))
 
-            # Check if the category exists
-            existing_category_cursor = self.db_manager.execute_query('SELECT * FROM categories WHERE id = %s', (category_id,))
-            existing_category = existing_category_cursor.fetchone()
-            if existing_category:
-                # Update the category with the new data
-                query = 'UPDATE categories SET name = %s WHERE id = %s'
-                values = (updated_data.get('name', existing_category[1]), category_id)
-                
-                self.db_manager.execute_query(query, values)
+            # Assuming category_data is a dictionary with a 'name' key
+            query = 'UPDATE categories SET name = %s WHERE id = %s'
+            values = (category_data.get('name'), category_id)
 
-                # Return the updated category
-                updated_category = self.db_manager.execute_query('SELECT * FROM categories WHERE id = %s', (category_id,).fetchone())
-                response_body = json.dumps(updated_category)
-                self._send_response(200, response_body)
-            else:
-                self._send_response(404, 'Category not found')
-        else:
-            self._send_response(404, 'Not Found')
-
-    def do_DELETE(self):
-        if self.path.startswith('/categories/'):
-            category_id = int(self.path.split('/')[2])
-
-            # Check if the category exists
-            existing_category = self.db_manager.execute_query('SELECT * FROM categories WHERE id = ?', (category_id,)).fetchone()
-            if existing_category:
-                # Delete the category
-                self.db_manager.execute_query('DELETE FROM categories WHERE id = ?', (category_id,))
-
-                # Return the deleted category
-                response_body = json.dumps({'id': existing_category[0], 'name': existing_category[1]})
-                self._send_response(200, response_body)
-                
-            else:
-                self._send_response(404, 'Category not found')
+            try:
+                # Execute the query and get the number of affected rows
+                affected_rows = self.db_manager.execute_query(query, values)
+                if affected_rows > 0:
+                    response_body = json.dumps({'id': category_id, 'name': category_data.get('name')})
+                    self._send_response(200, response_body)
+                else:
+                    self._send_response(404, 'Category not found')
+            except Exception as e:
+                print(f"Error updating category: {e}")
+                self._send_response(500, 'Internal Server Error')
         else:
             self._send_response(404, 'Not Found')
             
     def do_DELETE(self):
-        if '/categories/soft-delete/' in self.path:
-            parts = self.path.split('/')
-            if len(parts) >= 4:
-                category_id = parts[3]
+        if self.path.startswith('/categories/'):
+            try:
+                category_id = int(self.path.split('/')[2])
 
-                # Check if the category exists
-                existing_category = self.db_manager.execute_query('SELECT * FROM categories WHERE id = ?', (category_id,)).fetchone()
-                if existing_category:
-                    # Soft delete the category by updating the "is_deleted" column
-                    self.db_manager.execute_query('UPDATE categories SET is_deleted = 1 WHERE id = ?', (category_id,))
-
-                    # Return the deleted category
-                    response_body = json.dumps({'id': existing_category[0], 'name': existing_category[1]})
-                    self._send_response(200, response_body)
-                else:
+                # Check if the category exists before attempting to delete
+                category = self.db_manager.execute_query('SELECT * FROM categories WHERE id = %s', (category_id,))
+                if not category:
                     self._send_response(404, 'Category not found')
-            else:
-                self._send_response(400, 'Invalid request')
+                    return
+
+                # Delete the category
+                self.db_manager.execute_query('DELETE FROM categories WHERE id = %s', (category_id,))
+
+                self._send_response(200, 'Category deleted successfully')
+            except ValueError:
+                self._send_response(400, 'Invalid category ID format')
+            except Exception as e:
+                print(f"Error deleting category: {e}")
+                self._send_response(500, 'Internal Server Error')
         else:
             self._send_response(404, 'Not Found')
+
+
+            
+    def do_DELETE(self):
+        if self.path.startswith('/categories_soft/'):
+            try:
+                category_id = int(self.path.split('/')[2])
+
+                # Check if the category exists before attempting to delete
+                category = self.db_manager.execute_query('SELECT * FROM categories WHERE id = %s', (category_id,))
+                if not category:
+                    self._send_response(404, 'Category not found')
+                    return
+
+                # Soft delete the category by updating is_deleted to 1
+                self.db_manager.execute_query('UPDATE categories SET is_deleted = 1 WHERE id = %s', (category_id,))
+
+                self._send_response(200, 'Category soft deleted successfully')
+            except ValueError:
+                self._send_response(400, 'Invalid category ID format')
+            except Exception as e:
+                print(f"Error deleting category: {e}")
+                self._send_response(500, 'Internal Server Error')
+        else:
+            self._send_response(404, 'Not Found')
+
+
+    
+    
+
+
 
 class ProductHandler(BaseHTTPRequestHandler):
     db_manager = DatabaseManager(
         host='127.0.0.1',
         user='root',
         password='root',
-        database='shopify'
+        database='shoplast2'
     )
     db_manager.create_tables()
 
@@ -247,7 +251,7 @@ class ProductHandler(BaseHTTPRequestHandler):
             self._send_response(404, 'Not Found')
 
     def _get_all_products_with_prices_and_images(self):
-        # Retrieve all products with their associated prices, categories, and images
+        # Retrieve all products with their associated prices and images
         query = '''
             SELECT
                 products.id,
@@ -256,13 +260,10 @@ class ProductHandler(BaseHTTPRequestHandler):
                 prices.price,
                 prices.quantity,
                 images.id AS image_id,
-                images.image_path,
-                categories.name AS category_name
+                images.image_path
             FROM products
             LEFT JOIN prices ON products.id = prices.product_id
             LEFT JOIN images ON products.id = images.product_id
-            LEFT JOIN product_categories ON products.id = product_categories.product_id
-            LEFT JOIN categories ON product_categories.category_id = categories.id
         '''
         result = self.db_manager.execute_query(query, fetch=True)
 
@@ -275,21 +276,17 @@ class ProductHandler(BaseHTTPRequestHandler):
                 price,
                 quantity,
                 image_id,
-                image_path,
-                category_name
+                image_path
             ) = row
 
             if product_id not in products:
                 products[product_id] = {
                     'id': product_id,
                     'name': product_name,
-                    'categories': [],
+                    'category_id': category_id,
                     'prices': [],
                     'images': []
                 }
-
-            if category_id is not None and category_name is not None:
-                products[product_id]['categories'].append({'id': category_id, 'name': category_name})
 
             if price is not None:
                 products[product_id]['prices'].append({'price': price, 'quantity': quantity})
@@ -297,15 +294,14 @@ class ProductHandler(BaseHTTPRequestHandler):
             if image_id is not None:
                 image_info = {
                     'id': image_id,
-                    'image': image_path,
-                    'thumbnail': self._get_thumbnail_path(image_path),
-                    'thumbnail400': self._get_thumbnail_path400(image_path),
-                    'thumbnail1200': self._get_thumbnail_path1200(image_path),
+                    'image': image_path.replace('\\', '/'),
+                    'thumbnail': self._get_thumbnail_path(image_path).replace('\\', '/'),
+                    'thumbnail400': self._get_thumbnail_path400(image_path).replace('\\', '/'),
+                    'thumbnail1200': self._get_thumbnail_path1200(image_path).replace('\\', '/'),
                 }
                 products[product_id]['images'].append(image_info)
 
         return list(products.values())
-
 
     def _get_product_with_prices(self, product_id):
         # Retrieve all products with their associated prices
@@ -403,74 +399,99 @@ class ProductHandler(BaseHTTPRequestHandler):
             print(values)  # Debugging statement
             self.db_manager.execute_query(query, values)
             
+    
     def do_PUT(self):
-        # Handle update requests
         if self.path.startswith('/products/'):
-            try:
-                product_id = int(self.path.split('/')[-1])
-            except ValueError:
-                self._send_response(400, 'Invalid product ID')
-                return
-
+            product_id = self.path.split('/')[2]
             content_length = int(self.headers['Content-Length'])
             product_data = json.loads(self.rfile.read(content_length).decode('utf-8'))
-            self._update_product(product_id, product_data)
-        else:
-            self._send_response(404, 'Not Found')
 
-    def do_DELETE(self):
-        # Handle delete requests
-        if self.path.startswith('/products/'):
-            product_id = int(self.path.split('/')[-1])
-            self._delete_product(product_id)
+            # Extract updated product details
+            name = product_data.get('name')
+            category_id = product_data.get('category_id')
+            prices_data = product_data.get('prices', [])
+
+            # Check if name, category_ids, and prices are provided
+            if not name or not category_id or not prices_data:
+                self._send_response(400, 'Name, category_id, and prices are required')
+                return
+
+            # Check if all categories with the provided IDs exist in the database
+            if not self._categories_exist(category_id):
+                self._send_response(400, 'Invalid category_id provided')
+                return
+
+            # Check if prices have the required "price" field
+            if not all('price' in price_data for price_data in prices_data):
+                self._send_response(400, 'Each price must have a "price" field')
+                return
+
+            # Update the product in the database
+            category_id_str = ','.join(map(str, category_id))
+            query = 'UPDATE products SET name=%s, category_id=%s WHERE id=%s'
+            values = (name, category_id_str, product_id)
+
+            # Check if the product exists before updating
+            if not self._product_exists(product_id):
+                self._send_response(404, 'Product not found')
+                return
+
+            self.db_manager.execute_query(query, values, fetch=False)
+
+            # Update prices in the database
+            self._update_prices_for_product(product_id, prices_data)
+
+            # Retrieve the updated product with prices from the database
+            updated_product = self._get_product_with_prices(product_id)
+
+            self._send_response(200, json.dumps(updated_product))
         else:
             self._send_response(404, 'Not Found')
             
-    def _update_product(self, product_id, product_data):
-        # Update an existing product in the database
-        name = product_data.get('name')
-        category_ids = product_data.get('category_ids')
-        prices_data = product_data.get('prices', [])
+    def _product_exists(self, product_id):
+        query = 'SELECT id FROM products WHERE id = %s'
+        values = (product_id,)
+        result = self.db_manager.execute_query(query, values, fetch=True)
 
-        if not name or not category_ids or not prices_data:
-            self._send_response(400, 'Name, category_ids, and prices are required')
-            return
+        return bool(result)
 
-        if not self._categories_exist(category_ids):
-            self._send_response(400, 'Invalid category_ids provided')
-            return
-
-        category_ids_str = ','.join(map(str, category_ids))
-        update_query = 'UPDATE products SET name=?, category_ids=? WHERE id=?'
-        update_values = (name, category_ids_str, product_id)
-        self.db_manager.execute_query(update_query, update_values)
+    def _update_prices_for_product(self, product_id, prices_data):
+        # Update prices for a given product
+        delete_query = 'DELETE FROM prices WHERE product_id = %s'
+        insert_query = 'INSERT INTO prices (product_id, price, quantity) VALUES (%s, %s, %s)'
 
         # Delete existing prices for the product
-        delete_prices_query = 'DELETE FROM prices WHERE product_id=?'
-        delete_prices_values = (product_id,)
-        self.db_manager.execute_query(delete_prices_query, delete_prices_values)
+        self.db_manager.execute_query(delete_query, (product_id,))
 
         # Insert new prices for the product
-        self._insert_prices_for_product(product_id, prices_data)
+        for price_data in prices_data:
+            price = price_data.get('price')
+            quantity = price_data.get('quantity', 100)  # Default quantity to 100 if not provided
+            values = (product_id, price, quantity)
+            self.db_manager.execute_query(insert_query, values)
+            
+    
 
-        updated_product = self._get_product_with_prices(product_id)
-        self._send_response(200, json.dumps(updated_product))
+    def do_DELETE(self):
+        if self.path.startswith('/products/'):
+            product_id = int(self.path.split('/')[2])
 
-    def _delete_product(self, product_id):
-        # Delete a product and its associated data from the database
-        delete_prices_query = 'DELETE FROM prices WHERE product_id=?'
-        delete_prices_values = (product_id,)
-        self.db_manager.execute_query(delete_prices_query, delete_prices_values)
+            # Delete product by ID
+            query = 'DELETE FROM products WHERE id = %s'
+            values = (product_id,)
 
-        delete_images_query = 'DELETE FROM images WHERE product_id=?'
-        delete_images_values = (product_id,)
-        self.db_manager.execute_query(delete_images_query, delete_images_values)
+            try:
+                affected_rows = self.db_manager.execute_query(query, values)
+                if affected_rows > 0:
+                    self._send_response(204, '')  # 204 No Content for successful deletion
+                else:
+                    self._send_response(404, 'Product not found')
+            except Exception as e:
+                print(f"Error deleting product: {e}")
+                self._send_response(500, 'Internal Server Error')
+        else:
+            self._send_response(404, 'Not Found')
 
-        delete_product_query = 'DELETE FROM products WHERE id=?'
-        delete_product_values = (product_id,)
-        self.db_manager.execute_query(delete_product_query, delete_product_values)
-
-        self._send_response(204, 'Product deleted successfully')
         
     def _get_thumbnail_path(self, original_image_path):
         # Assuming the thumbnails are saved in the 'thumbnails' subdirectory
@@ -514,7 +535,7 @@ class ImageHandler(BaseHTTPRequestHandler):
         host='127.0.0.1',
         user='root',
         password='root',
-        database='shopify'
+        database='shoplast2'
     )
     db_manager.create_tables()
     def _send_response(self, status_code, response_body):
@@ -581,45 +602,64 @@ class ImageHandler(BaseHTTPRequestHandler):
             
     def do_PUT(self):
         if self.path.startswith('/images/'):
-        # Extract image ID from the request path
-            image_id = int(self.path.split('/')[-1])
+            image_id = int(self.path.split('/')[2])
 
-            # Check if the image ID exists in the database
-            if self._image_exists(image_id):
-                # Parse the request body to get updated data (assuming JSON format)
-                content_length = int(self.headers['Content-Length'])
-                updated_data = json.loads(self.rfile.read(content_length).decode('utf-8'))
+            content_type, _ = cgi.parse_header(self.headers['Content-Type'])
+
+            # Check if the request is sending 'multipart/form-data'
+            if content_type == 'multipart/form-data':
+                form_data = cgi.FieldStorage(
+                    fp=self.rfile,
+                    headers=self.headers,
+                    environ={'REQUEST_METHOD': 'PUT',
+                            'CONTENT_TYPE': self.headers['Content-Type']}
+                )
+
+                # Extract image and product_id from the form data
+                image_file = form_data['image'].file
+                product_id = form_data.getvalue('product_id')
+
+                # Save the updated image to a file
+                image_path = self._save_image_and_thumbnail(image_file)
 
                 # Update image information in the database
-                query = 'UPDATE images SET product_id = ? WHERE id = ?'
-                values = (updated_data.get('product_id'), image_id)
-                self.db_manager.execute_query(query, values)
+                query = 'UPDATE images SET product_id = %s, image_path = %s WHERE id = %s'
+                values = (product_id, image_path, image_id)
 
-                self._send_response(200, 'Image updated successfully')
+                try:
+                    affected_rows = self.db_manager.execute_query(query, values)
+                    if affected_rows > 0:
+                        self._send_response(200, 'Image updated successfully')
+                    else:
+                        self._send_response(404, 'Image not found')
+                except Exception as e:
+                    print(f"Error updating image: {e}")
+                    self._send_response(500, 'Internal Server Error')
             else:
-                self._send_response(404, 'Image not found')
+                self._send_response(400, 'Invalid Content-Type. Expected multipart/form-data')
         else:
-            self._send_response(400, 'Invalid request path')
-
-    ### Delete Image:
+            self._send_response(404, 'Not Found')
 
     def do_DELETE(self):
         if self.path.startswith('/images/'):
-            # Extract image ID from the request path
-            image_id = int(self.path.split('/')[-1])
+            image_id = int(self.path.split('/')[2])
 
-            # Check if the image ID exists in the database
-            if self._image_exists(image_id):
-                # Delete image from the database
-                query = 'DELETE FROM images WHERE id = ?'
-                values = (image_id,)
-                self.db_manager.execute_query(query, values)
+            # Delete image by ID
+            query = 'DELETE FROM images WHERE id = %s'
+            values = (image_id,)
 
-                self._send_response(200, 'Image deleted successfully')
-            else:
-                self._send_response(404, 'Image not found')
+            try:
+                affected_rows = self.db_manager.execute_query(query, values)
+                if affected_rows > 0:
+                    self._send_response(204, '')  # 204 No Content for successful deletion
+                else:
+                    self._send_response(404, 'Image not found')
+            except Exception as e:
+                print(f"Error deleting image: {e}")
+                self._send_response(500, 'Internal Server Error')
         else:
-            self._send_response(400, 'Invalid request path')
+            self._send_response(404, 'Not Found')
+
 
 # Add a helper method to check if the image ID exists in the database
     def _image_exists(self, image_id):
